@@ -3,13 +3,13 @@ const std = @import("std");
 /// Representation for the hardware and components of a CHIP-8 system.
 const Hardware = struct {
     memory: [4096]u8 = .{0} ** 4096,
-    display: [64][128]u8 = .{.{0} ** 128} ** 64,
+    display: [32][64]u8 = .{.{0} ** 64} ** 32,
     PC: u8 = 0,
     I: u16 = 0,
     stack: ?[]u16 = null,
     delay_timer: u8 = 0,
     sound_timer: u8 = 0,
-    registers: [16]u8 = .{0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF},
+    registers: [16]u8 = .{0} ** 16,
 
     fn printMemoryToFile(self: Hardware, allocator: std.mem.Allocator) !void {
         const file = try std.fs.cwd().createFile("memory.zhip8.txt", .{ .read = true });
@@ -30,21 +30,47 @@ const Hardware = struct {
 /// are ordered from most significant (starting with one) to least significant (four).
 const Opcode = struct { one: u8, two: u8, three: u8, four: u8, value: u16 };
 
-pub fn main() !void {
-    const rom_file_path = "data/ROM/IBM Logo.ch8";
-    // const rom_file_path = "data/ROM/Tetris [Fran Dachille, 1991].ch8";
+const rom_file_path = "data/ROM/IBM Logo.ch8";
+// const rom_file_path = "data/ROM/Tetris [Fran Dachille, 1991].ch8";
 
+const system_font = [80]u8{
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+};
+
+pub fn main() !void {
+    // Setup allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const read_buffer: []u8 = try std.fs.cwd().readFileAlloc(allocator, rom_file_path, std.math.maxInt(u32));
-    defer allocator.free(read_buffer);
-
+    // Initialize the hardware
     var hardware = Hardware {};
 
+    // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
+    const read_buffer: []u8 = try std.fs.cwd().readFileAlloc(allocator, rom_file_path, std.math.maxInt(u32));
+    defer allocator.free(read_buffer);
     for (0..read_buffer.len) |i| {
         hardware.memory[0x200 + i] = read_buffer[i];
+    }
+
+    // Load the system font into memory
+    for (0..system_font.len) |i| {
+        hardware.memory[0x050 + i] = system_font[i];
     }
 
     try hardware.printMemoryToFile(allocator);
