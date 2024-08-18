@@ -252,10 +252,47 @@ fn setI(hardware: *Hardware, op: *const Opcode) void {
 ///     DXYN - Draw a sprite at position VX,VY with N bytes of data starting at the address stored in I
 ///     D01F - Draw a sprite at position V0,V1 with 0xF bytes of data starting at the address stored in I
 fn draw(hardware: *Hardware, op: *const Opcode) void {
-    const x = hardware.V[op.two];
-    const y = hardware.V[op.three];
+    const x = hardware.V[op.two] & 63;
+    const y = hardware.V[op.three] & 31;
+    const n = op.four;
 
-    // hardware.display[y][x] = ?
+    // Reset the flag register to 0 before drawing.
+    // If any pixels are turned off by this draw operation the flag register should switch to 1.
+    hardware.V[0xF] = 0;
 
-    std.debug.print("Drawing a sprite at ({x}, {x}) using {x} bytes of data from address {x}\n", .{ x, y, op.four, hardware.I });
+    // Sprite data is defined in memory, with each register eight bits from the starting position
+    //  e.g., one "opcode" is two lines @ 8 bytes per line
+    //
+    // Example (IBM Logo):
+    //  sprite for the "I" starts at 554 in memory and ends at 568
+    //
+    // hardware.display[y][x] = starting point for sprite drawing
+
+    std.debug.print("Drawing a sprite at ({X}, {X}) using {X} bytes of data starting from address {X}\n", .{ x, y, n, hardware.I });
+
+    for (0..n) |i| {
+        const sprite_row: u8 = hardware.memory[hardware.I+i];
+
+        var flattened_row: u8 = 0;
+
+        // Each instruction is 8 bytes
+        var j: u3 = 7;
+        while (j > 0) {
+            var pixel: u8 = hardware.display[y+i][x+j];
+            pixel <<= j;
+
+            flattened_row |= pixel;
+
+            if (j == 0)
+                break;
+            j -= 1;
+        }
+
+        // `flattened_row` represents what needs to be set on the display for this sprite
+        flattened_row ^= sprite_row;
+
+        std.debug.print("drawing: {X:0>2}\n", .{sprite_row});
+        std.debug.print("flattened_row: {b:0>8}\n", .{flattened_row});
+
+    }
 }
