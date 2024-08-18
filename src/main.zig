@@ -1,23 +1,51 @@
 const std = @import("std");
 
+/// Size of the memory. ~4K
+const memory_size = 4096;
+
+/// Display width in pixels.
+const display_width = 64;
+/// Display height in pixels.
+const display_height = 32;
+
 /// Representation for the hardware and components of a CHIP-8 system.
 const Hardware = struct {
-    memory: [4096]u8 = .{0} ** 4096,
-    display: [32][64]u8 = .{.{0} ** 64} ** 32,
+    memory: [memory_size]u8 = .{0} ** memory_size,
+    display: [display_height][display_width]u1 = .{.{0} ** display_width} ** display_height,
     PC: u16 = 0x200,
     I: u16 = 0,
     stack: ?[]u16 = null,
     delay_timer: u8 = 0,
     sound_timer: u8 = 0,
-    registers: [16]u8 = .{0} ** 16,
+    V: [16]u8 = .{0} ** 16,
 
+    /// Dumps the contents of the memory array into a `memory.zhip8.txt` file for debugging.
     fn printMemoryToFile(self: Hardware, allocator: std.mem.Allocator) !void {
         const file = try std.fs.cwd().createFile("memory.zhip8.txt", .{ .read = true });
         defer file.close();
 
-        for (0..4096) |i| {
+        for (0..self.memory.len) |i| {
             // Display each code as only two hex digits (8 bits)
             const str = try std.fmt.allocPrint(allocator, "{d}: {X:0>2}\n", .{i, self.memory[i]});
+            defer allocator.free(str);
+            try file.writeAll(str);
+        }
+    }
+
+    /// Dumps the contents fo the display array into a `display.zhip8.txt` file for debugging.
+    fn printDisplayToFile(self: Hardware, allocator: std.mem.Allocator) !void {
+        const file = try std.fs.cwd().createFile("display.zhip8.txt", .{ .read = true });
+        defer file.close();
+
+        // TODO: This is pretty inefficient, find a better way to alloc/write strings to files dynamically in Zig.
+        for (0..display_height) |i| {
+            for (0..display_width) |j| {
+                const pixel = self.display[i][j];
+                const str = try std.fmt.allocPrint(allocator, "| {d} |", .{pixel});
+                defer allocator.free(str);
+                try file.writeAll(str);
+            }
+            const str = try std.fmt.allocPrint(allocator, "\n", .{});
             defer allocator.free(str);
             try file.writeAll(str);
         }
@@ -72,11 +100,12 @@ pub fn main() !void {
         hardware.memory[0x050 + i] = system_font[i];
     }
 
+    try hardware.printDisplayToFile(allocator);
+
     // Calculate the number of seconds per instruction
     const time_per_instruction_s: f32 = @as(f32, 1) / 700;
     // ~1.4 ms ~= ~1428571.40000 ns
     const time_per_instruction_ns: u64 = @intFromFloat(time_per_instruction_s * @as(f32, @floatFromInt(std.time.ns_per_s)));
-
     var in_a = try std.time.Instant.now();
     var in_b = try std.time.Instant.now();
 
@@ -93,7 +122,6 @@ pub fn main() !void {
         in_b = try std.time.Instant.now();
 
         const op = fetch(&hardware);
-        std.debug.print("{X:0>4}\n", .{ op.value });
         execute(&hardware, &op);
     }
 }
@@ -134,12 +162,12 @@ fn fetch(hardware: *Hardware) Opcode {
 
 fn execute(hardware: *Hardware, op: *const Opcode) void {
     switch (op.one) {
-        0x0 => clear(),
+        0x0 => clear(hardware),
         0x1 => jump(hardware, op),
-        0x6 => std.debug.print("set register VX\n", .{}),
-        0x7 => std.debug.print("add value to register\n", .{}),
-        0xA => std.debug.print("set index register\n", .{}),
-        0xD => std.debug.print("display/draw\n", .{}),
+        0x6 => setVX(hardware, op),
+        0x7 => addVX(hardware, op),
+        0xA => setI(hardware, op),
+        0xD => draw(hardware, op),
         else => unreachable,
     }
 }
@@ -152,8 +180,8 @@ fn execute(hardware: *Hardware, op: *const Opcode) void {
 ///
 /// Example:
 ///     00E0 - Clear the screen
-fn clear() void {
-    std.debug.print("todo: Clear the screen, setup graphics!\n", .{});
+fn clear(hardware: *Hardware) void {
+    hardware.display = .{.{0} ** 64} ** 32;
 }
 
 /// Constructs the address of the jump using the last three bits of the opcode
@@ -171,11 +199,63 @@ fn jump(hardware: *Hardware, op: *const Opcode) void {
     hardware.PC = address;
 }
 
-/// Constructs the number
+/// Sets the value of the register indicated in the second bit of the opcode
+/// to the value constructed by the last two bits of the opcode.
 ///
 /// Example:
 ///     6XNN - Store the number NN in register VX
-///     6212 - Store the number 0x12 in register V2
-fn setVX(_: *Hardware, _: *const Opcode) void {
+///     600C - Store the number 0x0C in register V0
+fn setVX(hardware: *Hardware, op: *const Opcode) void {
+    const register: u8 = op.two;
+    const t: u8 = op.three << 4;
+    const o: u8 = op.four;
 
+    const value: u8 = t | o;
+    hardware.V[register] = value;
+}
+
+/// Adds the value constructed by the last two bits of the opode to the
+/// current value of the register indicated in the second bit of the opcode.
+///
+/// Example:
+///     7XNN - Add the value NN to register VX
+///     7008 - Add the value 0x08 to register VX
+fn addVX(hardware: *Hardware, op: *const Opcode) void {
+    const register: u8 = op.two;
+    const t: u8 = op.three << 4;
+    const o: u8 = op.four;
+
+    const value: u8 = t | o;
+    hardware.V[register] += value;
+}
+
+/// Sets the value of the index register (I) to the address constructed
+/// from the last three bits of the opcode.
+///
+/// Example:
+///     ANNN - Store memory address NNN in register I
+///     A239 - Store memory address 0x239 in register I
+fn setI(hardware: *Hardware, op: *const Opcode) void {
+    const h: u12 = @as(u12, op.two) << 8;
+    const t: u12 = @as(u12, op.three) << 4;
+    const o: u12 = @as(u12, op.four);
+
+    const address = h | t | o;
+    hardware.I = address;
+}
+
+/// Draws a sprite at the position indicated by the values contained in the registers
+/// of the second and third bits of the opcode with N bytes of data represented by the fourth
+/// bit of the opcode starting at the address stored in I.
+///
+/// Example:
+///     DXYN - Draw a sprite at position VX,VY with N bytes of data starting at the address stored in I
+///     D01F - Draw a sprite at position V0,V1 with 0xF bytes of data starting at the address stored in I
+fn draw(hardware: *Hardware, op: *const Opcode) void {
+    const x = hardware.V[op.two];
+    const y = hardware.V[op.three];
+
+    // hardware.display[y][x] = ?
+
+    std.debug.print("Drawing a sprite at ({x}, {x}) using {x} bytes of data from address {x}\n", .{ x, y, op.four, hardware.I });
 }
