@@ -41,7 +41,7 @@ const Hardware = struct {
         for (0..display_height) |i| {
             for (0..display_width) |j| {
                 const pixel = self.display[i][j];
-                const str = try std.fmt.allocPrint(allocator, "| {d} |", .{pixel});
+                const str = try std.fmt.allocPrint(allocator, "{d}", .{pixel});
                 defer allocator.free(str);
                 try file.writeAll(str);
             }
@@ -100,8 +100,6 @@ pub fn main() !void {
         hardware.memory[0x050 + i] = system_font[i];
     }
 
-    try hardware.printDisplayToFile(allocator);
-
     // Calculate the number of seconds per instruction
     const time_per_instruction_s: f32 = @as(f32, 1) / 700;
     // ~1.4 ms ~= ~1428571.40000 ns
@@ -110,8 +108,8 @@ pub fn main() !void {
     var in_b = try std.time.Instant.now();
 
     // Start the processing loop
-    while (true) {
-
+    var i: u8 = 0;
+    while (true) : (i += 1) {
         // Attempt at writing a timer to control the frequency of instructions per second.
         in_a = try std.time.Instant.now();
         const work_time = in_a.since(in_b);
@@ -123,7 +121,13 @@ pub fn main() !void {
 
         const op = fetch(&hardware);
         execute(&hardware, &op);
+
+        if (i == 50) {
+            break;
+        }
     }
+
+    try hardware.printDisplayToFile(allocator);
 }
 
 fn fetch(hardware: *Hardware) Opcode {
@@ -268,31 +272,49 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
     //
     // hardware.display[y][x] = starting point for sprite drawing
 
-    std.debug.print("Drawing a sprite at ({X}, {X}) using {X} bytes of data starting from address {X}\n", .{ x, y, n, hardware.I });
+    std.debug.print("Drawing a sprite at ({d}, {d}) using {d} bytes of data starting from address {X}\n", .{ x, y, n, hardware.I });
 
     for (0..n) |i| {
         const sprite_row: u8 = hardware.memory[hardware.I+i];
 
-        var flattened_row: u8 = 0;
+        std.debug.print("sprite_row: {b:0>8}\n", .{sprite_row});
+        //std.debug.print("actual:     ", .{});
 
         // Each instruction is 8 bytes
         var j: u3 = 7;
-        while (j > 0) {
-            var pixel: u8 = hardware.display[y+i][x+j];
-            pixel <<= j;
+        while (j >= 0) {
+            //std.debug.print("\tpixel: {b:0>8}\n", .{pixel});
+            //std.debug.print("\tvisiting (x,y) => ({d},{d})\n", .{ x+j, y+i });
 
-            flattened_row |= pixel;
+            const sprite_bit: u1 = @truncate(sprite_row >> j);
+            const xor = sprite_bit ^ hardware.display[y+i][x+j];
 
-            if (j == 0)
+            // std.debug.print("\txor = {b:0>1} ^ {b:0>1}\n", .{ sprite_bit, hardware.display[y+i][x+j] });
+            // std.debug.print("{b:0>1}", .{xor});
+
+            hardware.display[y+i][x+j] = xor;
+
+            if (j == 0) {
                 break;
+            }
             j -= 1;
         }
-
-        // `flattened_row` represents what needs to be set on the display for this sprite
-        flattened_row ^= sprite_row;
-
-        std.debug.print("drawing: {X:0>2}\n", .{sprite_row});
-        std.debug.print("flattened_row: {b:0>8}\n", .{flattened_row});
-
+        //std.debug.print("\n", .{});
     }
+}
+
+test {
+    const bits: u8 = 0b1101_0000;
+
+    const trunc_seven: u1 = @truncate(bits >> 7);
+    try std.testing.expect(trunc_seven == 1);
+
+    const trunc_six: u1 = @truncate(bits >> 6);
+    try std.testing.expect(trunc_six == 1);
+
+    const trunc_five: u1 = @truncate(bits >> 5);
+    try std.testing.expect(trunc_five == 0);
+
+    const trunc_four: u1 = @truncate(bits >> 4);
+    try std.testing.expect(trunc_four == 1);
 }
