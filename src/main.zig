@@ -27,7 +27,7 @@ const Hardware = struct {
 
         for (0..self.memory.len) |i| {
             // Display each code as only two hex digits (8 bits)
-            const str = try std.fmt.allocPrint(allocator, "{d}: {X:0>2}\n", .{i, self.memory[i]});
+            const str = try std.fmt.allocPrint(allocator, "{d}: {X:0>2}\n", .{ i, self.memory[i] });
             defer allocator.free(str);
             try file.writeAll(str);
         }
@@ -76,39 +76,16 @@ const system_font = [80]u8{
     0xF0, 0x80, 0x80, 0x80, 0xF0, // C
     0xE0, 0x90, 0x90, 0x90, 0xE0, // D
     0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 };
 
 pub fn main() !void {
-    try run();
-
-    try sdl.init(.{ .audio = true, .video = true });
-    defer sdl.quit();
-
-    const window = try sdl.Window.create(
-        "zig-gamedev-window",
-        sdl.Window.pos_undefined,
-        sdl.Window.pos_undefined,
-        600,
-        600,
-        .{ .opengl = true, .allow_highdpi = true },
-    );
-
-    var timer: std.time.Timer = try std.time.Timer.start();
-    while (timer.read() != (std.time.ns_per_s * 5)) {
-        continue;
-    }
-
-    defer window.destroy();
-}
-
-pub fn run() !void {
     // Setup allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
     // Initialize the hardware
-    var hardware = Hardware {};
+    var hardware = Hardware{};
 
     // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
@@ -124,39 +101,50 @@ pub fn run() !void {
         hardware.memory[0x050 + i] = system_font[i];
     }
 
-    // Calculate the number of seconds per instruction
-    const time_per_instruction_s: f32 = @as(f32, 1) / 700;
-    // ~1.4 ms ~= ~1428571.40000 ns
-    const time_per_instruction_ns: u64 = @intFromFloat(time_per_instruction_s * @as(f32, @floatFromInt(std.time.ns_per_s)));
-    var in_a = try std.time.Instant.now();
-    var in_b = try std.time.Instant.now();
+    // SDL
+    try sdl.init(.{ .audio = true, .video = true });
+    defer sdl.quit();
 
-    // Start the processing loop
-    var i: u8 = 0;
-    while (true) : (i += 1) {
-        // Attempt at writing a timer to control the frequency of instructions per second.
-        in_a = try std.time.Instant.now();
-        const work_time = in_a.since(in_b);
-        if (work_time < time_per_instruction_ns) {
-            const delta_ns = time_per_instruction_ns - work_time;
-            std.time.sleep(delta_ns);
+    const window = try sdl.Window.create(
+        "zhip8",
+        sdl.Window.pos_undefined,
+        sdl.Window.pos_undefined,
+        600,
+        600,
+        .{ .opengl = true, .allow_highdpi = true },
+    );
+    defer window.destroy();
+
+    var running = true;
+    while (running) {
+        var event: sdl.Event = undefined;
+        while (sdl.pollEvent(&event)) {
+            switch (event.type) {
+                sdl.EventType.quit => running = false,
+                else => {},
+            }
         }
-        in_b = try std.time.Instant.now();
 
-        const op = fetch(&hardware);
-        execute(&hardware, &op);
-
-        if (i == 50) {
-            break;
-        }
+        fde(&hardware);
     }
 
     try hardware.printDisplayToFile(allocator);
 }
 
+/// Fetch, decode, execute. Due to the simplicity of the CHIP-8 specification
+/// decoding is performed as instructions are fetched.
+fn fde(hardware: *Hardware) void {
+    const op = fetch(hardware);
+    execute(hardware, &op);
+}
+
+/// Fetches the next instruction from memory. In the CHIP-8 specification, one instruction is
+/// represented with 16 bytes, requiring two slots in memory each. As a result, when fetching
+/// instructions we fetch the one currently indiciated by the program counter as well as the next,
+/// and increment the program counter by two.
 fn fetch(hardware: *Hardware) Opcode {
     const upper_instruction_bits = hardware.memory[hardware.PC];
-    const lower_instruction_bits = hardware.memory[hardware.PC+1];
+    const lower_instruction_bits = hardware.memory[hardware.PC + 1];
     hardware.PC += 2;
 
     // Create a 16-bit integer from both 8-bit ints.
@@ -188,6 +176,7 @@ fn fetch(hardware: *Hardware) Opcode {
     return Opcode{ .one = one, .two = two, .three = three, .four = four, .value = value };
 }
 
+/// Executes an instruction with the provided opcode on the current hardware state.
 fn execute(hardware: *Hardware, op: *const Opcode) void {
     switch (op.one) {
         0x0 => clear(hardware),
@@ -299,7 +288,7 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
     std.debug.print("Drawing a sprite at ({d}, {d}) using {d} bytes of data starting from address {X}\n", .{ x, y, n, hardware.I });
 
     for (0..n) |i| {
-        const sprite_row: u8 = hardware.memory[hardware.I+i];
+        const sprite_row: u8 = hardware.memory[hardware.I + i];
 
         //std.debug.print("sprite_row: {b:0>8}\n", .{sprite_row});
         //std.debug.print("actual:     ", .{});
@@ -311,12 +300,12 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
             //std.debug.print("\tvisiting (x,y) => ({d},{d})\n", .{ x+j, y+i });
 
             const sprite_bit: u1 = @truncate(sprite_row >> j);
-            const xor = sprite_bit ^ hardware.display[y+i][x+j];
+            const xor = sprite_bit ^ hardware.display[y + i][x + j];
 
             // std.debug.print("\txor = {b:0>1} ^ {b:0>1}\n", .{ sprite_bit, hardware.display[y+i][x+j] });
             // std.debug.print("{b:0>1}", .{xor});
 
-            hardware.display[y+i][x+j] = xor;
+            hardware.display[y + i][x + j] = xor;
 
             if (j == 0) {
                 break;
