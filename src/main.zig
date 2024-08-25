@@ -1,4 +1,5 @@
 const std = @import("std");
+const sdl = @import("zsdl2");
 
 /// Size of the memory. ~4K
 const memory_size = 4096;
@@ -79,6 +80,29 @@ const system_font = [80]u8{
 };
 
 pub fn main() !void {
+    try run();
+
+    try sdl.init(.{ .audio = true, .video = true });
+    defer sdl.quit();
+
+    const window = try sdl.Window.create(
+        "zig-gamedev-window",
+        sdl.Window.pos_undefined,
+        sdl.Window.pos_undefined,
+        600,
+        600,
+        .{ .opengl = true, .allow_highdpi = true },
+    );
+
+    var timer: std.time.Timer = try std.time.Timer.start();
+    while (timer.read() != (std.time.ns_per_s * 5)) {
+        continue;
+    }
+
+    defer window.destroy();
+}
+
+pub fn run() !void {
     // Setup allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -277,7 +301,7 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
     for (0..n) |i| {
         const sprite_row: u8 = hardware.memory[hardware.I+i];
 
-        std.debug.print("sprite_row: {b:0>8}\n", .{sprite_row});
+        //std.debug.print("sprite_row: {b:0>8}\n", .{sprite_row});
         //std.debug.print("actual:     ", .{});
 
         // Each instruction is 8 bytes
@@ -301,20 +325,4 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
         }
         //std.debug.print("\n", .{});
     }
-}
-
-test {
-    const bits: u8 = 0b1101_0000;
-
-    const trunc_seven: u1 = @truncate(bits >> 7);
-    try std.testing.expect(trunc_seven == 1);
-
-    const trunc_six: u1 = @truncate(bits >> 6);
-    try std.testing.expect(trunc_six == 1);
-
-    const trunc_five: u1 = @truncate(bits >> 5);
-    try std.testing.expect(trunc_five == 0);
-
-    const trunc_four: u1 = @truncate(bits >> 4);
-    try std.testing.expect(trunc_four == 1);
 }
