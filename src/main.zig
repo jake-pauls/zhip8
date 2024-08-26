@@ -1,64 +1,12 @@
 const std = @import("std");
 const sdl = @import("zsdl2");
 
-/// Size of the memory. ~4K
-const memory_size = 4096;
+const core = @import("core.zig");
+const Hardware = core.Hardware;
+const Opcode = core.Opcode;
 
-/// Display width in pixels.
-const display_width = 64;
-/// Display height in pixels.
-const display_height = 32;
-
-/// Representation for the hardware and components of a CHIP-8 system.
-const Hardware = struct {
-    memory: [memory_size]u8 = .{0} ** memory_size,
-    display: [display_height][display_width]u1 = .{.{0} ** display_width} ** display_height,
-    PC: u16 = 0x200,
-    I: u16 = 0,
-    stack: ?[]u16 = null,
-    delay_timer: u8 = 0,
-    sound_timer: u8 = 0,
-    V: [16]u8 = .{0} ** 16,
-
-    /// Dumps the contents of the memory array into a `memory.zhip8.txt` file for debugging.
-    fn printMemoryToFile(self: Hardware, allocator: std.mem.Allocator) !void {
-        const file = try std.fs.cwd().createFile("memory.zhip8.txt", .{ .read = true });
-        defer file.close();
-
-        for (0..self.memory.len) |i| {
-            // Display each code as only two hex digits (8 bits)
-            const str = try std.fmt.allocPrint(allocator, "{d}: {X:0>2}\n", .{ i, self.memory[i] });
-            defer allocator.free(str);
-            try file.writeAll(str);
-        }
-    }
-
-    /// Dumps the contents fo the display array into a `display.zhip8.txt` file for debugging.
-    fn printDisplayToFile(self: Hardware, allocator: std.mem.Allocator) !void {
-        const file = try std.fs.cwd().createFile("display.zhip8.txt", .{ .read = true });
-        defer file.close();
-
-        // TODO: This is pretty inefficient, find a better way to alloc/write strings to files dynamically in Zig.
-        for (0..display_height) |i| {
-            for (0..display_width) |j| {
-                const pixel = self.display[i][j];
-                const str = try std.fmt.allocPrint(allocator, "{d}", .{pixel});
-                defer allocator.free(str);
-                try file.writeAll(str);
-            }
-            const str = try std.fmt.allocPrint(allocator, "\n", .{});
-            defer allocator.free(str);
-            try file.writeAll(str);
-        }
-    }
-};
-
-/// Representation for an opcode processed by the CHIP-8 system.
-///
-/// Each opcode contains four bytes to represent each digit used in a CHIP-8 opcode,
-/// and 2 bytes to represent the cumuluative opcode with all bits together. These bits
-/// are ordered from most significant (starting with one) to least significant (four).
-const Opcode = struct { one: u8, two: u8, three: u8, four: u8, value: u16 };
+const sdl_color_black = sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
+const sdl_color_white = sdl.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 const system_font = [80]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -106,14 +54,18 @@ pub fn main() !void {
     defer sdl.quit();
 
     const window = try sdl.Window.create(
-        "zhip8",
+        "ZHIP8",
         sdl.Window.pos_undefined,
         sdl.Window.pos_undefined,
-        600,
-        600,
+        256, //core.display_width * 4
+        128, //core.display_height * 4
         .{ .opengl = true, .allow_highdpi = true },
     );
     defer window.destroy();
+
+    const renderer = try sdl.createRenderer(window, -1, sdl.Renderer.Flags{});
+    try sdl.setRenderDrawColor(renderer, sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
+    try sdl.renderClear(renderer);
 
     var running = true;
     while (running) {
@@ -125,18 +77,42 @@ pub fn main() !void {
             }
         }
 
-        fde(&hardware);
+        const op = fetch(&hardware);
+        execute(&hardware, &op);
+
+        // TODO: Only draw to the SDL window when we need to?
+        try sdl_draw(&hardware, renderer);
+    }
+}
+
+//
+// SDL
+//
+
+/// Uses the SDL renderer to draw pixels stored in the CHIP-8's display register to the screen.
+fn sdl_draw(hardware: *Hardware, renderer: *sdl.Renderer) !void {
+    // Clear the screen
+    try sdl.setRenderDrawColor(renderer, sdl_color_black);
+    try sdl.renderClear(renderer);
+
+    // Draw pixels from the display
+    try sdl.setRenderDrawColor(renderer, sdl_color_white);
+    for (0..core.display_height) |y| {
+        for (0..core.display_width) |x| {
+            const pixel: u1 = hardware.display[y][x];
+            if (pixel == 1) {
+                // TODO: Appropriately upscale the screen, however, it's nice to see this for debugging purposes at the moment
+                try sdl.renderDrawPoint(renderer, @intCast(x * 4), @intCast(y * 4));
+            }
+        }
     }
 
-    try hardware.printDisplayToFile(allocator);
+    sdl.renderPresent(renderer);
 }
 
-/// Fetch, decode, execute. Due to the simplicity of the CHIP-8 specification
-/// decoding is performed as instructions are fetched.
-fn fde(hardware: *Hardware) void {
-    const op = fetch(hardware);
-    execute(hardware, &op);
-}
+//
+// Emulator
+//
 
 /// Fetches the next instruction from memory. In the CHIP-8 specification, one instruction is
 /// represented with 16 bytes, requiring two slots in memory each. As a result, when fetching
@@ -278,40 +254,37 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
     hardware.V[0xF] = 0;
 
     // Sprite data is defined in memory, with each register eight bits from the starting position
-    //  e.g., one "opcode" is two lines @ 8 bytes per line
+    //  e.g., one "opcode" is two lines @ 8 bits per line
     //
     // Example (IBM Logo):
     //  sprite for the "I" starts at 554 in memory and ends at 568
-    //
-    // hardware.display[y][x] = starting point for sprite drawing
-
-    std.debug.print("Drawing a sprite at ({d}, {d}) using {d} bytes of data starting from address {X}\n", .{ x, y, n, hardware.I });
 
     for (0..n) |i| {
         const sprite_row: u8 = hardware.memory[hardware.I + i];
 
-        //std.debug.print("sprite_row: {b:0>8}\n", .{sprite_row});
-        //std.debug.print("actual:     ", .{});
+        // Maintain two indices, one for shifting and another for accessing screen pixels
+        var shift_index: u3 = 7;
+        var x_index: u3 = 0;
 
-        // Each instruction is 8 bytes
-        var j: u3 = 7;
-        while (j >= 0) {
-            //std.debug.print("\tpixel: {b:0>8}\n", .{pixel});
-            //std.debug.print("\tvisiting (x,y) => ({d},{d})\n", .{ x+j, y+i });
+        // Iterate while the shifting index is positive, we break early to prevent underflow.
+        while (shift_index >= 0 and x_index < 8) : (x_index += 1) {
+            // Right shift the row by our shifting index and truncate it to
+            // the last bit, this allows us to always access the end bit of the word
+            const sprite_bit: u1 = @truncate(sprite_row >> shift_index);
 
-            const sprite_bit: u1 = @truncate(sprite_row >> j);
-            const xor = sprite_bit ^ hardware.display[y + i][x + j];
+            // XOR the bit on the screen to turn it off or on appropriately
+            hardware.display[y + i][x + x_index] ^= sprite_bit;
 
-            // std.debug.print("\txor = {b:0>1} ^ {b:0>1}\n", .{ sprite_bit, hardware.display[y+i][x+j] });
-            // std.debug.print("{b:0>1}", .{xor});
+            // The flag register should be turned on if a pixel was turned off during this draw.
+            if (hardware.display[y + i][x + x_index] == 0 and sprite_bit == 1) {
+                hardware.V[0xF] = 1;
+            }
 
-            hardware.display[y + i][x + j] = xor;
-
-            if (j == 0) {
+            if (shift_index == 0) {
                 break;
             }
-            j -= 1;
+            shift_index -= 1;
         }
-        //std.debug.print("\n", .{});
     }
 }
+
