@@ -2,30 +2,6 @@ const std = @import("std");
 const sdl = @import("zsdl2");
 
 const core = @import("core.zig");
-const Hardware = core.Hardware;
-const Opcode = core.Opcode;
-
-const sdl_color_black = sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
-const sdl_color_white = sdl.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
-
-const system_font = [80]u8{
-    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-    0x20, 0x60, 0x20, 0x20, 0x70, // 1
-    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
-};
 
 pub fn main() !void {
     // Setup allocator
@@ -33,7 +9,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Initialize the hardware
-    var hardware = Hardware{};
+    var hardware = core.Hardware{};
 
     // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
@@ -45,8 +21,8 @@ pub fn main() !void {
     }
 
     // Load the system font into memory
-    for (0..system_font.len) |i| {
-        hardware.memory[0x050 + i] = system_font[i];
+    for (0..core.system_font.len) |i| {
+        hardware.memory[0x050 + i] = core.system_font[i];
     }
 
     // SDL
@@ -80,8 +56,9 @@ pub fn main() !void {
         const op = fetch(&hardware);
         execute(&hardware, &op);
 
-        // TODO: Only draw to the SDL window when we need to?
-        try sdl_draw(&hardware, renderer);
+        if (is_draw_op(&op)) {
+            try sdl_draw(&hardware, renderer);
+        }
     }
 }
 
@@ -90,13 +67,13 @@ pub fn main() !void {
 //
 
 /// Uses the SDL renderer to draw pixels stored in the CHIP-8's display register to the screen.
-fn sdl_draw(hardware: *Hardware, renderer: *sdl.Renderer) !void {
+fn sdl_draw(hardware: *core.Hardware, renderer: *sdl.Renderer) !void {
     // Clear the screen
-    try sdl.setRenderDrawColor(renderer, sdl_color_black);
+    try sdl.setRenderDrawColor(renderer, core.sdl_color_black);
     try sdl.renderClear(renderer);
 
     // Draw pixels from the display
-    try sdl.setRenderDrawColor(renderer, sdl_color_white);
+    try sdl.setRenderDrawColor(renderer, core.sdl_color_white);
     for (0..core.display_height) |y| {
         for (0..core.display_width) |x| {
             const pixel: u1 = hardware.display[y][x];
@@ -118,7 +95,7 @@ fn sdl_draw(hardware: *Hardware, renderer: *sdl.Renderer) !void {
 /// represented with 16 bytes, requiring two slots in memory each. As a result, when fetching
 /// instructions we fetch the one currently indiciated by the program counter as well as the next,
 /// and increment the program counter by two.
-fn fetch(hardware: *Hardware) Opcode {
+fn fetch(hardware: *core.Hardware) core.Opcode {
     const upper_instruction_bits = hardware.memory[hardware.PC];
     const lower_instruction_bits = hardware.memory[hardware.PC + 1];
     hardware.PC += 2;
@@ -149,11 +126,11 @@ fn fetch(hardware: *Hardware) Opcode {
     const three = lower_instruction_bits >> 4;
     const four = lower_instruction_bits & 0x0F;
 
-    return Opcode{ .one = one, .two = two, .three = three, .four = four, .value = value };
+    return core.Opcode{ .one = one, .two = two, .three = three, .four = four, .value = value };
 }
 
 /// Executes an instruction with the provided opcode on the current hardware state.
-fn execute(hardware: *Hardware, op: *const Opcode) void {
+fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
     switch (op.one) {
         0x0 => clear(hardware),
         0x1 => jump(hardware, op),
@@ -173,7 +150,7 @@ fn execute(hardware: *Hardware, op: *const Opcode) void {
 ///
 /// Example:
 ///     00E0 - Clear the screen
-fn clear(hardware: *Hardware) void {
+fn clear(hardware: *core.Hardware) void {
     hardware.display = .{.{0} ** 64} ** 32;
 }
 
@@ -183,7 +160,7 @@ fn clear(hardware: *Hardware) void {
 /// Example:
 ///     1NNN - Jump to address NNN
 ///     1228 - Jump to address 0x228
-fn jump(hardware: *Hardware, op: *const Opcode) void {
+fn jump(hardware: *core.Hardware, op: *const core.Opcode) void {
     const h: u12 = @as(u12, op.two) << 8;
     const t: u12 = @as(u12, op.three) << 4;
     const o: u12 = @as(u12, op.four);
@@ -198,7 +175,7 @@ fn jump(hardware: *Hardware, op: *const Opcode) void {
 /// Example:
 ///     6XNN - Store the number NN in register VX
 ///     600C - Store the number 0x0C in register V0
-fn setVX(hardware: *Hardware, op: *const Opcode) void {
+fn setVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     const register: u8 = op.two;
     const t: u8 = op.three << 4;
     const o: u8 = op.four;
@@ -213,7 +190,7 @@ fn setVX(hardware: *Hardware, op: *const Opcode) void {
 /// Example:
 ///     7XNN - Add the value NN to register VX
 ///     7008 - Add the value 0x08 to register VX
-fn addVX(hardware: *Hardware, op: *const Opcode) void {
+fn addVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     const register: u8 = op.two;
     const t: u8 = op.three << 4;
     const o: u8 = op.four;
@@ -228,7 +205,7 @@ fn addVX(hardware: *Hardware, op: *const Opcode) void {
 /// Example:
 ///     ANNN - Store memory address NNN in register I
 ///     A239 - Store memory address 0x239 in register I
-fn setI(hardware: *Hardware, op: *const Opcode) void {
+fn setI(hardware: *core.Hardware, op: *const core.Opcode) void {
     const h: u12 = @as(u12, op.two) << 8;
     const t: u12 = @as(u12, op.three) << 4;
     const o: u12 = @as(u12, op.four);
@@ -244,7 +221,7 @@ fn setI(hardware: *Hardware, op: *const Opcode) void {
 /// Example:
 ///     DXYN - Draw a sprite at position VX,VY with N bytes of data starting at the address stored in I
 ///     D01F - Draw a sprite at position V0,V1 with 0xF bytes of data starting at the address stored in I
-fn draw(hardware: *Hardware, op: *const Opcode) void {
+fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
     const x = hardware.V[op.two] & 63;
     const y = hardware.V[op.three] & 31;
     const n = op.four;
@@ -288,3 +265,10 @@ fn draw(hardware: *Hardware, op: *const Opcode) void {
     }
 }
 
+//
+// Utilities
+//
+
+fn is_draw_op(op: *const core.Opcode) bool {
+    return op.one == 0x0 or op.one == 0xD;
+}
