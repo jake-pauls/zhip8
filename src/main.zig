@@ -14,6 +14,7 @@ pub fn main() !void {
     // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
     const rom_file_path = "data/ROM/IBM Logo.ch8";
+    // const rom_file_path = "data/ROM/Test/test_opcode.ch8";
     const read_buffer: []u8 = try std.fs.cwd().readFileAlloc(allocator, rom_file_path, std.math.maxInt(u32));
     defer allocator.free(read_buffer);
     for (0..read_buffer.len) |i| {
@@ -33,8 +34,8 @@ pub fn main() !void {
         "ZHIP8",
         sdl.Window.pos_undefined,
         sdl.Window.pos_undefined,
-        256, //core.display_width * 4
-        128, //core.display_height * 4
+        256, //core.display_width_in_pixels * 4
+        128, //core.display_height_in_pixels * 4
         .{ .opengl = true, .allow_highdpi = true },
     );
     defer window.destroy();
@@ -74,8 +75,8 @@ fn sdl_draw(hardware: *core.Hardware, renderer: *sdl.Renderer) !void {
 
     // Draw pixels from the display
     try sdl.setRenderDrawColor(renderer, core.sdl_color_white);
-    for (0..core.display_height) |y| {
-        for (0..core.display_width) |x| {
+    for (0..core.display_height_in_pixels) |y| {
+        for (0..core.display_width_in_pixels) |x| {
             const pixel: u1 = hardware.display[y][x];
             if (pixel == 1) {
                 // TODO: Appropriately upscale the screen, however, it's nice to see this for debugging purposes at the moment
@@ -132,8 +133,25 @@ fn fetch(hardware: *core.Hardware) core.Opcode {
 /// Executes an instruction with the provided opcode on the current hardware state.
 fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
     switch (op.one) {
-        0x0 => clear(hardware),
+        0x0 => {
+            switch (op.two) {
+                0x0 => {
+                    switch (op.three) {
+                        0xE => {
+                            switch (op.four) {
+                                0x0 => clear(hardware),
+                                0xE => subroutine_return(hardware),
+                                else => unreachable,
+                            }
+                        },
+                        else => unreachable,
+                    }
+                },
+                else => unreachable,
+            }
+        },
         0x1 => jump(hardware, op),
+        0x2 => subroutine_call(hardware, op),
         0x6 => setVX(hardware, op),
         0x7 => addVX(hardware, op),
         0xA => setI(hardware, op),
@@ -212,6 +230,38 @@ fn setI(hardware: *core.Hardware, op: *const core.Opcode) void {
 
     const address = h | t | o;
     hardware.I = address;
+}
+
+/// Calls the subroutine at the passed address by setting the PC
+/// to it as well as pushing the current value PC onto the stack.
+///
+/// Example:
+///     2NNN - Push the current address in the PC onto the stack and set the PC to address NNN as a subroutine call
+///     22A5 - Push the current address in the PC onto the stack and set the PC to address 0x2A5 as a subroutine call
+fn subroutine_call(hardware: *core.Hardware, op: *const core.Opcode) void {
+    // Push the current address in the PC onto the stack}
+    hardware.stack[hardware.stack_pointer] = hardware.PC;
+    hardware.stack_pointer += 1;
+
+    // Note: This is just a jump
+    const h: u12 = @as(u12, op.two) << 8;
+    const t: u12 = @as(u12, op.three) << 4;
+    const o: u12 = @as(u12, op.four);
+
+    const address = h | t | o;
+    hardware.PC = address;
+}
+
+/// Returns from the current subroutine by popping an address off the stack
+/// and setting the PC to it.
+///
+/// Example:
+///     00EE - Pop an address from the stack and set the PC to it.
+fn subroutine_return(hardware: *core.Hardware) void {
+    // The stack pointer will always be looking one above the top of the stack
+    hardware.PC = hardware.stack[hardware.stack_pointer - 1];
+    // Decrementing the stack pointer is enough to consider the item popped, future entries will just overwrite this
+    hardware.stack_pointer -= 1;
 }
 
 /// Draws a sprite at the position indicated by the values contained in the registers

@@ -2,12 +2,17 @@ const std = @import("std");
 const sdl = @import("zsdl2");
 
 /// Size of the memory. ~4K
-const memory_size = 4096;
+const memory_size_in_bytes = 4096;
+
+/// Stack size in bytes.
+const stack_size_in_bytes = 64;
+const bytes_per_slot_on_stack = 2;
+const stack_size = stack_size_in_bytes / bytes_per_slot_on_stack;
 
 /// Display width in pixels.
-pub const display_width = 64;
+pub const display_width_in_pixels = 64;
 /// Display height in pixels.
-pub const display_height = 32;
+pub const display_height_in_pixels = 32;
 
 /// RGBA constant for the color black.
 pub const sdl_color_black = sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
@@ -36,11 +41,12 @@ pub const system_font = [80]u8{
 
 /// Representation for the hardware and components of a CHIP-8 system.
 pub const Hardware = struct {
-    memory: [memory_size]u8 = .{0} ** memory_size,
-    display: [display_height][display_width]u1 = .{.{0} ** display_width} ** display_height,
+    memory: [memory_size_in_bytes]u8 = .{0} ** memory_size_in_bytes,
+    display: [display_height_in_pixels][display_width_in_pixels]u1 = .{.{0} ** display_width_in_pixels} ** display_height_in_pixels,
     PC: u16 = 0x200,
     I: u16 = 0,
-    stack: ?[]u16 = null,
+    stack: [stack_size]u16 = .{0} ** stack_size, // 64B / 2B
+    stack_pointer: u8 = 0,
     delay_timer: u8 = 0,
     sound_timer: u8 = 0,
     V: [16]u8 = .{0} ** 16,
@@ -64,8 +70,8 @@ pub const Hardware = struct {
         defer file.close();
 
         // TODO: This is pretty inefficient, find a better way to alloc/write strings to files dynamically in Zig.
-        for (0..display_height) |i| {
-            for (0..display_width) |j| {
+        for (0..display_height_in_pixels) |i| {
+            for (0..display_width_in_pixels) |j| {
                 const pixel = self.display[i][j];
                 const str = try std.fmt.allocPrint(allocator, "{d}", .{pixel});
                 defer allocator.free(str);
