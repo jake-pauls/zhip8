@@ -3,6 +3,10 @@ const sdl = @import("zsdl2");
 
 const core = @import("core.zig");
 
+/// Configurable setting to set the register VX as VY prior to performing logical shifts.
+/// Used in some CHIP-8 games and programs.
+const set_vx_to_vy_on_shift: bool = true;
+
 pub fn main() !void {
     // Setup allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -152,8 +156,26 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
         },
         0x1 => jump(hardware, op),
         0x2 => subroutine_call(hardware, op),
+        0x3 => conditional_skip_eq(hardware, op),
+        0x4 => conditional_skip_neq(hardware, op),
+        0x5 => conditional_skip_xy_eq(hardware, op),
         0x6 => setVX(hardware, op),
         0x7 => addVX(hardware, op),
+        0x8 => {
+            switch (op.four) {
+                0x0 => lar_set_vx_vy(hardware, op),
+                0x1 => lar_bitwise_or(hardware, op),
+                0x2 => lar_bitwise_and(hardware, op),
+                0x3 => lar_bitwise_xor(hardware, op),
+                0x4 => lar_add(hardware, op),
+                0x5 => lar_subtract_vx_vy(hardware, op),
+                0x6 => lar_right_shift(hardware, op),
+                0x7 => lar_subtract_vy_vx(hardware, op),
+                0xE => lar_left_shift(hardware, op),
+                else => unreachable,
+            }
+        },
+        0x9 => conditional_skip_xy_neq(hardware, op),
         0xA => setI(hardware, op),
         0xD => draw(hardware, op),
         else => unreachable,
@@ -207,14 +229,16 @@ fn setVX(hardware: *core.Hardware, op: *const core.Opcode) void {
 ///
 /// Example:
 ///     7XNN - Add the value NN to register VX
-///     7008 - Add the value 0x08 to register VX
+///     7008 - Add the value 0x08 to register V0
 fn addVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     const register: u8 = op.two;
     const t: u8 = op.three << 4;
     const o: u8 = op.four;
 
     const value: u8 = t | o;
-    hardware.V[register] += value;
+    const ov = @addWithOverflow(hardware.V[register], value);
+
+    hardware.V[register] = ov[0];
 }
 
 /// Sets the value of the index register (I) to the address constructed
@@ -256,12 +280,177 @@ fn subroutine_call(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// and setting the PC to it.
 ///
 /// Example:
-///     00EE - Pop an address from the stack and set the PC to it.
+///     00EE - Pop an address from the stack and set the PC to it
 fn subroutine_return(hardware: *core.Hardware) void {
     // The stack pointer will always be looking one above the top of the stack
     hardware.PC = hardware.stack[hardware.stack_pointer - 1];
     // Decrementing the stack pointer is enough to consider the item popped, future entries will just overwrite this
     hardware.stack_pointer -= 1;
+}
+
+/// Skips one two byte instruction if the value in VX is equal to the passed address.
+///
+/// Example:
+///     3XNN - Skips one two byte instruction if the value in VX is equal to NN
+///     30A0 - Skips one two byte instruction if the value in V0 is equal to 0xA0
+fn conditional_skip_eq(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const t: u8 = @as(u8, op.three) << 4;
+    const o: u8 = @as(u8, op.four);
+
+    const value: u8 = t | o;
+
+    // Skip the next two byte instruction if the value in VX is equal to NN
+    if (hardware.V[op.two] == value) {
+        hardware.PC += 2;
+    }
+}
+
+/// Skips one two byte instruction if the value in VX is not equal to the passed address.
+///
+/// Example:
+///     4XNN - Skips one two byte instruction if the value in VX is not equal to NN
+///     40A0 - Skips one two byte instruction if the value in V0 is not equal to 0xA0
+fn conditional_skip_neq(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const t: u8 = @as(u8, op.three) << 4;
+    const o: u8 = @as(u8, op.four);
+
+    const value: u8 = t | o;
+
+    // Skip the next two byte instruction if the value in VX is not equal to NN
+    if (hardware.V[op.two] != value) {
+        hardware.PC += 2;
+    }
+}
+
+/// Skips one two byte instruction if the value in VX is equal to the value in VY.
+///
+/// Example:
+///     5XY0 - Skips one two byte instruction if the value in VX is equal to the value in VY
+///     5560 - Skips one two byte instruction if the value in V5 is equal to the value in V6
+fn conditional_skip_xy_eq(hardware: *core.Hardware, op: *const core.Opcode) void {
+    if (hardware.V[op.two] == hardware.V[op.three]) {
+        hardware.PC += 2;
+    }
+}
+
+/// Skips one two byte instruction if the value in VX is not equal to the value in VY.
+///
+/// Example:
+///     9XY0 - Skips one two byte instruction if the value in VX is not equal to the value in VY
+///     9A50 - Skips one two byte instruction if the value in VA is not equal to the value in V5
+fn conditional_skip_xy_neq(hardware: *core.Hardware, op: *const core.Opcode) void {
+    if (hardware.V[op.two] != hardware.V[op.three]) {
+        hardware.PC += 2;
+    }
+}
+
+/// VX is set to the value of VY.
+///
+/// Example:
+///     8XY0 - VX is set to the value of VY
+///     8A40 - VA is set to the value of V4
+fn lar_set_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.V[op.two] = hardware.V[op.three];
+}
+
+/// VX is set to the bitwise OR of VX and VY.
+///
+/// Example:
+///     8XY1 - VX is set to the bitwise OR of VX and VY
+///     8A41 - VA is set to the bitwise OR of VA and V4
+fn lar_bitwise_or(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.V[op.two] |= hardware.V[op.three];
+}
+
+/// VX is set to the bitwise AND of VX and VY.
+///
+/// Example:
+///     8XY2 - VX is set to the bitwise AND of VX and VY
+///     8B22 - VB is set to the bitwise AND of VB and V2
+fn lar_bitwise_and(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.V[op.two] &= hardware.V[op.three];
+}
+
+/// VX is set to the bitwise XOR of VX and VY.
+///
+/// Example:
+///     8XY3 - VX is set to the bitwise XOR of VX and VY
+///     8013 - V0 is set to the bitwise XOR of V0 and V1
+fn lar_bitwise_xor(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.V[op.two] ^= hardware.V[op.three];
+}
+
+/// VX is set to the value of VX plus the value of VY. Unlike `addVX`
+/// if the value results in an overflow the flag bit is set.
+///
+/// Example:
+///     8XY4 - VX is set to the value of VX plus the value of VY
+///     8494 - V4 is set to the value of V4 plus the value of V9
+fn lar_add(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const ov = @addWithOverflow(hardware.V[op.two], hardware.V[op.three]);
+
+    // Update the flag bit based on whether or not overflow occurred
+    hardware.V[0xF] = if (ov[1] != 0) 1 else 0;
+
+    hardware.V[op.two] = ov[0];
+}
+
+/// VX is set to the value of VX minus VY. Prior to performing the subtraction
+/// the flag bit is set if the minuend (VX) is larger than the subtrahend (VY).
+///
+/// Example:
+///     8XY5 - VX is set to the value of VX minus VY
+///     8385 - V3 is set to the value of V3 minus V8
+fn lar_subtract_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const vx = hardware.V[op.two];
+    const vy = hardware.V[op.three];
+
+    hardware.V[0xF] = if (vx > vy) 1 else 0;
+    hardware.V[op.two] = vx - vy;
+}
+
+/// VX is set to the value of VY minus VX. Prior to performing the subtraction
+/// the flag bit is set if the minuen (VY) is larger than the subtrahend (VX).
+///
+/// Example:
+///     8XY7 - VX is set to the value of VY minus VX
+///     88E7 - V8 is set to the value of VE minus V8
+fn lar_subtract_vy_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const vx = hardware.V[op.two];
+    const vy = hardware.V[op.three];
+
+    hardware.V[0xF] = if (vy > vx) 1 else 0;
+    hardware.V[op.two] = vy - vx;
+}
+
+/// Shifts the value in VX one bit to the right. Sets the flag bit if
+/// the bit being shifted out was 1.
+///
+/// Configurable: Use `set_vx_to_vy_on_shift` in order to set VX as VY for shifts.
+///
+/// Example:
+///     8XY6 - Shifts the value of VX one bit to the right
+///     8BC6 - Shifts the value of VB one bit to the right
+fn lar_right_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
+    if (set_vx_to_vy_on_shift) {
+        hardware.V[op.two] = hardware.V[op.three];
+    }
+
+    // Mask the first bit that'll be shifted out by the right shift to determine the flag bit
+    hardware.V[0xF] = hardware.V[op.two] & 0b1;
+    // Perform the right shift by one bit
+    hardware.V[op.two] >>= 1;
+}
+
+fn lar_left_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
+    if (set_vx_to_vy_on_shift) {
+        hardware.V[op.two] = hardware.V[op.three];
+    }
+
+    // Shift the most significant bit that'll be shifted out by the left shift to determine the flag bit
+    hardware.V[0xF] = hardware.V[op.two] >> 7;
+    // Perform the left shift bit
+    hardware.V[op.two] <<= 1;
 }
 
 /// Draws a sprite at the position indicated by the values contained in the registers
@@ -320,5 +509,5 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
 //
 
 fn is_draw_op(op: *const core.Opcode) bool {
-    return op.one == 0x0 or op.one == 0xD;
+    return op.value == 0x00E0 or op.one == 0xD;
 }
