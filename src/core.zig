@@ -50,6 +50,7 @@ pub const Hardware = struct {
     delay_timer: u8 = 0,
     sound_timer: u8 = 0,
     V: [16]u8 = .{0} ** 16,
+    randomizer: std.Random,
 
     /// Dumps the contents of the memory array into a `memory.zhip8.txt` file for debugging.
     pub fn printMemoryToFile(self: Hardware, allocator: std.mem.Allocator) !void {

@@ -6,6 +6,9 @@ const core = @import("core.zig");
 /// Configurable setting to set the register VX as VY prior to performing logical shifts.
 /// Used in some CHIP-8 games and programs.
 const set_vx_to_vy_on_shift: bool = true;
+/// Configurable setting for the `jump_with_offset` function that uses the second digit
+/// in the opcode as the register (VX) to add to the address being provided.
+const use_second_op_as_vx_for_jump_with_offset: bool = true;
 
 pub fn main() !void {
     // Setup allocator
@@ -13,12 +16,17 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Initialize the hardware
-    var hardware = core.Hardware{};
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    var hardware = core.Hardware{ .randomizer = prng.random() };
 
     // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
-    const rom_file_path = "data/ROM/IBM Logo.ch8";
-    // const rom_file_path = "data/ROM/Test/test_opcode.ch8";
+    //const rom_file_path = "data/ROM/IBM Logo.ch8";
+    const rom_file_path = "data/ROM/Test/test_opcode.ch8";
     const read_buffer: []u8 = try std.fs.cwd().readFileAlloc(allocator, rom_file_path, std.math.maxInt(u32));
     defer allocator.free(read_buffer);
     for (0..read_buffer.len) |i| {
@@ -145,13 +153,13 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                             switch (op.four) {
                                 0x0 => clear(hardware),
                                 0xE => subroutine_return(hardware),
-                                else => unreachable,
+                                else => unreachable_op_dump(op),
                             }
                         },
-                        else => unreachable,
+                        else => unreachable_op_dump(op),
                     }
                 },
-                else => unreachable,
+                else => unreachable_op_dump(op),
             }
         },
         0x1 => jump(hardware, op),
@@ -172,13 +180,15 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                 0x6 => lar_right_shift(hardware, op),
                 0x7 => lar_subtract_vy_vx(hardware, op),
                 0xE => lar_left_shift(hardware, op),
-                else => unreachable,
+                else => unreachable_op_dump(op),
             }
         },
         0x9 => conditional_skip_xy_neq(hardware, op),
         0xA => setI(hardware, op),
+        0xB => jump_with_offset(hardware, op),
+        0xC => lar_random(hardware, op),
         0xD => draw(hardware, op),
-        else => unreachable,
+        else => unreachable_op_dump(op),
     }
 }
 
@@ -207,6 +217,28 @@ fn jump(hardware: *core.Hardware, op: *const core.Opcode) void {
 
     const address = h | t | o;
     hardware.PC = address;
+}
+
+/// Jumps to the address NNN plus the value in register V0.
+///
+/// Configurable: Use `use_second_op_as_vx_for_jump_with_offset` to use the second opcode digit as the register to add to the base address.
+///
+/// Example:
+///     BNNN - Jumps to the address NNN plus the value in register V0
+///     B222 - Jumps to the address 222 plus the value in register V0 (333, if the value in register V0 is 111)
+fn jump_with_offset(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const h: u12 = @as(u12, op.two) << 8;
+    const t: u12 = @as(u12, op.three) << 4;
+    const o: u12 = @as(u12, op.four);
+
+    var address: u12 = 0;
+    if (use_second_op_as_vx_for_jump_with_offset) {
+        address = (t | o) + hardware.V[op.two];
+        hardware.PC = address;
+    } else {
+        address = (h | t | o) + hardware.V[0];
+        hardware.PC = address;
+    }
 }
 
 /// Sets the value of the register indicated in the second bit of the opcode
@@ -391,7 +423,6 @@ fn lar_add(hardware: *core.Hardware, op: *const core.Opcode) void {
 
     // Update the flag bit based on whether or not overflow occurred
     hardware.V[0xF] = if (ov[1] != 0) 1 else 0;
-
     hardware.V[op.two] = ov[0];
 }
 
@@ -406,7 +437,9 @@ fn lar_subtract_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
     const vy = hardware.V[op.three];
 
     hardware.V[0xF] = if (vx > vy) 1 else 0;
-    hardware.V[op.two] = vx - vy;
+
+    const ov = @subWithOverflow(vx, vy);
+    hardware.V[op.two] = ov[0];
 }
 
 /// VX is set to the value of VY minus VX. Prior to performing the subtraction
@@ -420,7 +453,9 @@ fn lar_subtract_vy_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
     const vy = hardware.V[op.three];
 
     hardware.V[0xF] = if (vy > vx) 1 else 0;
-    hardware.V[op.two] = vy - vx;
+
+    const ov = @subWithOverflow(vy, vx);
+    hardware.V[op.two] = ov[0];
 }
 
 /// Shifts the value in VX one bit to the right. Sets the flag bit if
@@ -442,6 +477,14 @@ fn lar_right_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] >>= 1;
 }
 
+/// Shifts the value in VX one bit to the left. Sets the flag bit if
+/// the bit being shifted out was 1.
+///
+/// Configurable: Use `set_vx_to_vy_on_shift` in order to set VX as VY for shifts.
+///
+/// Example:
+///     8XY6 - Shifts the value of VX one bit to the left
+///     8BC6 - Shifts the value of VB one bit to the left
 fn lar_left_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (set_vx_to_vy_on_shift) {
         hardware.V[op.two] = hardware.V[op.three];
@@ -451,6 +494,23 @@ fn lar_left_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[0xF] = hardware.V[op.two] >> 7;
     // Perform the left shift bit
     hardware.V[op.two] <<= 1;
+}
+
+/// Generates a random number, binary ANDs it with the value provided in the opcode, and
+/// stores the result in VX.
+///
+/// Example:
+///     CXNN - Generates a random u8, performs a binary AND with the value NN, and stores the result in VX
+///     CXBB - Generates a random u8, performs a binary AND with the value BB, and stores the result in VX
+fn lar_random(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const t: u8 = @as(u8, op.three) << 4;
+    const o: u8 = @as(u8, op.four);
+
+    const value: u8 = t | o;
+    const rand = hardware.randomizer.int(u8);
+    const value_and_rand = value & rand;
+
+    hardware.V[op.two] = value_and_rand;
 }
 
 /// Draws a sprite at the position indicated by the values contained in the registers
@@ -507,6 +567,11 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
 //
 // Utilities
 //
+
+fn unreachable_op_dump(op: *const core.Opcode) void {
+    std.log.err("Panic! Unreachable opcode detected! ({X})", .{op.value});
+    unreachable;
+}
 
 fn is_draw_op(op: *const core.Opcode) bool {
     return op.value == 0x00E0 or op.one == 0xD;
