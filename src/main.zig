@@ -33,7 +33,11 @@ pub fn main() !void {
         hardware.memory[0x200 + i] = read_buffer[i];
     }
 
-    // Load the system font into memory
+    // Initialize all values in the internal keyboard to 0
+    // Decided to on using 0x0 to 0xF for this... because the memory here is unused anyways
+    for (0..15) |i| hardware.memory[0x0 + i] = 0;
+
+    // Load the system font into memory - common to use 0x050 to 0x09F
     for (0..core.system_font.len) |i| {
         hardware.memory[0x050 + i] = core.system_font[i];
     }
@@ -56,15 +60,9 @@ pub fn main() !void {
     try sdl.setRenderDrawColor(renderer, sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
     try sdl.renderClear(renderer);
 
-    var running = true;
-    while (running) {
-        var event: sdl.Event = undefined;
-        while (sdl.pollEvent(&event)) {
-            switch (event.type) {
-                sdl.EventType.quit => running = false,
-                else => {},
-            }
-        }
+    var isQuit = false;
+    while (!isQuit) {
+        sdl_poll_events(&hardware, &isQuit);
 
         const op = fetch(&hardware);
         execute(&hardware, &op);
@@ -78,6 +76,66 @@ pub fn main() !void {
 //
 // SDL
 //
+
+/// Uses the SDL event pump to catch and respond to window events.
+fn sdl_poll_events(hardware: *core.Hardware, isQuitEvent: *bool) void {
+    var event: sdl.Event = undefined;
+
+    // TODO: Could use keyboard state for this...
+    // const keyboard: []const u8 = sdl.getKeyboardState();
+    // if (keyboard[@as(usize, @intFromEnum(sdl.Scancode.q))] == 1) {
+    //    std.debug.print("KEYBOARD STATE sdl.Scancode.q\n", .{});
+    // }
+
+    while (sdl.pollEvent(&event)) {
+        switch (event.type) {
+            sdl.EventType.quit => isQuitEvent.* = true,
+            sdl.EventType.keydown => {
+                switch (event.key.keysym.scancode) {
+                    sdl.Scancode.@"1" => hardware.memory[0x0] = 1,
+                    sdl.Scancode.@"2" => hardware.memory[0x1] = 1,
+                    sdl.Scancode.@"3" => hardware.memory[0x2] = 1,
+                    sdl.Scancode.@"4" => hardware.memory[0x3] = 1,
+                    sdl.Scancode.q => hardware.memory[0x4] = 1,
+                    sdl.Scancode.w => hardware.memory[0x5] = 1,
+                    sdl.Scancode.e => hardware.memory[0x6] = 1,
+                    sdl.Scancode.r => hardware.memory[0x7] = 1,
+                    sdl.Scancode.a => hardware.memory[0x8] = 1,
+                    sdl.Scancode.s => hardware.memory[0x9] = 1,
+                    sdl.Scancode.d => hardware.memory[0xA] = 1,
+                    sdl.Scancode.f => hardware.memory[0xB] = 1,
+                    sdl.Scancode.z => hardware.memory[0xC] = 1,
+                    sdl.Scancode.x => hardware.memory[0xD] = 1,
+                    sdl.Scancode.c => hardware.memory[0xE] = 1,
+                    sdl.Scancode.v => hardware.memory[0xF] = 1,
+                    else => {},
+                }
+            },
+            sdl.EventType.keyup => {
+                switch (event.key.keysym.scancode) {
+                    sdl.Scancode.@"1" => hardware.memory[0x0] = 0,
+                    sdl.Scancode.@"2" => hardware.memory[0x1] = 0,
+                    sdl.Scancode.@"3" => hardware.memory[0x2] = 0,
+                    sdl.Scancode.@"4" => hardware.memory[0x3] = 0,
+                    sdl.Scancode.q => hardware.memory[0x4] = 0,
+                    sdl.Scancode.w => hardware.memory[0x5] = 0,
+                    sdl.Scancode.e => hardware.memory[0x6] = 0,
+                    sdl.Scancode.r => hardware.memory[0x7] = 0,
+                    sdl.Scancode.a => hardware.memory[0x8] = 0,
+                    sdl.Scancode.s => hardware.memory[0x9] = 0,
+                    sdl.Scancode.d => hardware.memory[0xA] = 0,
+                    sdl.Scancode.f => hardware.memory[0xB] = 0,
+                    sdl.Scancode.z => hardware.memory[0xC] = 0,
+                    sdl.Scancode.x => hardware.memory[0xD] = 0,
+                    sdl.Scancode.c => hardware.memory[0xE] = 0,
+                    sdl.Scancode.v => hardware.memory[0xF] = 0,
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
 
 /// Uses the SDL renderer to draw pixels stored in the CHIP-8's display register to the screen.
 fn sdl_draw(hardware: *core.Hardware, renderer: *sdl.Renderer) !void {
@@ -188,6 +246,23 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
         0xB => jump_with_offset(hardware, op),
         0xC => lar_random(hardware, op),
         0xD => draw(hardware, op),
+        0xE => {
+            switch (op.three) {
+                0x9 => {
+                    switch (op.four) {
+                        0xE => skip_if_key_pressed(hardware, op),
+                        else => unreachable_op_dump(op),
+                    }
+                },
+                0xA => {
+                    switch (op.four) {
+                        0x1 => skip_if_key_not_pressed(hardware, op),
+                        else => unreachable_op_dump(op),
+                    }
+                },
+                else => unreachable_op_dump(op),
+            }
+        },
         else => unreachable_op_dump(op),
     }
 }
@@ -513,6 +588,38 @@ fn lar_random(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] = value_and_rand;
 }
 
+/// Skips one instruction if the key corresponding to the value in VX is pressed.
+/// The keyboard has 16 keys, so the hex value stored in VX is the key being evaluated.
+///
+/// Example:
+///     EX9E - Skips an instruction if the key corresponding to the value in VX is pressed
+///     E29E - Skips an instruction if the key corresponding to the value in V2 is pressed
+fn skip_if_key_pressed(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const key = hardware.V[op.two];
+
+    // We can use the hex value directly since the keys are stored in the first 16 registers
+    if (hardware.memory[key] == 1) {
+        // Skip an instruction if the key is pressed
+        hardware.PC += 2;
+    }
+}
+
+/// Skips one instruction is the key corresponding to the value in VX is not pressed.
+/// The keyboard has 16 keys, so the hex value stored in VX is the key being evaluated.
+///
+/// Example:
+///     EXA1 - Skips an instruction if the key corresponding to the value in VX is not pressed
+///     E2A1 - Skips an instruction if the key corresponding to the value in V2 is not pressed
+fn skip_if_key_not_pressed(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const key = hardware.V[op.two];
+
+    // We can use the hex value directly since the keys are stored in the first 16 registers
+    if (hardware.memory[key] == 0) {
+        // Skip an instruction if the key is not pressed
+        hardware.PC += 2;
+    }
+}
+
 /// Draws a sprite at the position indicated by the values contained in the registers
 /// of the second and third bits of the opcode with N bytes of data represented by the fourth
 /// bit of the opcode starting at the address stored in I.
@@ -570,7 +677,7 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
 
 fn unreachable_op_dump(op: *const core.Opcode) void {
     std.log.err("Panic! Unreachable opcode detected! ({X})", .{op.value});
-    unreachable;
+    //unreachable;
 }
 
 fn is_draw_op(op: *const core.Opcode) bool {
