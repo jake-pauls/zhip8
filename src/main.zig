@@ -6,7 +6,7 @@ const core = @import("core.zig");
 /// Configurable setting to set the register VX as VY prior to performing logical shifts.
 /// Used in some CHIP-8 games and programs.
 const set_vx_to_vy_on_shift: bool = true;
-/// Configurable setting for the `jump_with_offset` function that uses the second digit
+/// Configurable setting for the `jumpWithOffset` function that uses the second digit
 /// in the opcode as the register (VX) to add to the address being provided.
 const use_second_op_as_vx_for_jump_with_offset: bool = true;
 
@@ -62,13 +62,13 @@ pub fn main() !void {
 
     var isQuit = false;
     while (!isQuit) {
-        sdl_poll_events(&hardware, &isQuit);
+        sdlPollEvents(&hardware, &isQuit);
 
         const op = fetch(&hardware);
         execute(&hardware, &op);
 
-        if (is_draw_op(&op)) {
-            try sdl_draw(&hardware, renderer);
+        if (isDrawOp(&op)) {
+            try sdlDraw(&hardware, renderer);
         }
     }
 }
@@ -78,8 +78,11 @@ pub fn main() !void {
 //
 
 /// Uses the SDL event pump to catch and respond to window events.
-fn sdl_poll_events(hardware: *core.Hardware, isQuitEvent: *bool) void {
+fn sdlPollEvents(hardware: *core.Hardware, isQuitEvent: *bool) void {
     var event: sdl.Event = undefined;
+
+    // Reset flag for key presses
+    hardware.was_key_pressed_this_frame = false;
 
     while (sdl.pollEvent(&event)) {
         switch (event.type) {
@@ -125,6 +128,8 @@ fn sdl_poll_events(hardware: *core.Hardware, isQuitEvent: *bool) void {
                     sdl.Scancode.v => hardware.memory[0xF] = 0,
                     else => {},
                 }
+                // TODO: Refactor to only be performed for the keys supported by the CHIP-8
+                hardware.was_key_pressed_this_frame = true;
             },
             else => {},
         }
@@ -132,7 +137,7 @@ fn sdl_poll_events(hardware: *core.Hardware, isQuitEvent: *bool) void {
 }
 
 /// Uses the SDL renderer to draw pixels stored in the CHIP-8's display register to the screen.
-fn sdl_draw(hardware: *core.Hardware, renderer: *sdl.Renderer) !void {
+fn sdlDraw(hardware: *core.Hardware, renderer: *sdl.Renderer) !void {
     // Clear the screen
     try sdl.setRenderDrawColor(renderer, core.sdl_color_black);
     try sdl.renderClear(renderer);
@@ -204,80 +209,80 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                         0xE => {
                             switch (op.four) {
                                 0x0 => clear(hardware),
-                                0xE => subroutine_return(hardware),
-                                else => unimplemented_op_dump(op),
+                                0xE => subroutineReturn(hardware),
+                                else => unimplementedOpDump(op),
                             }
                         },
-                        else => unimplemented_op_dump(op),
+                        else => unimplementedOpDump(op),
                     }
                 },
-                else => unimplemented_op_dump(op),
+                else => unimplementedOpDump(op),
             }
         },
         0x1 => jump(hardware, op),
-        0x2 => subroutine_call(hardware, op),
-        0x3 => conditional_skip_eq(hardware, op),
-        0x4 => conditional_skip_neq(hardware, op),
-        0x5 => conditional_skip_xy_eq(hardware, op),
+        0x2 => subroutineCall(hardware, op),
+        0x3 => conditionalSkipEq(hardware, op),
+        0x4 => conditionalSkipNeq(hardware, op),
+        0x5 => conditionalSkipXYEq(hardware, op),
         0x6 => setVX(hardware, op),
         0x7 => addVX(hardware, op),
         0x8 => {
             switch (op.four) {
-                0x0 => lar_set_vx_vy(hardware, op),
-                0x1 => lar_bitwise_or(hardware, op),
-                0x2 => lar_bitwise_and(hardware, op),
-                0x3 => lar_bitwise_xor(hardware, op),
-                0x4 => lar_add(hardware, op),
-                0x5 => lar_subtract_vx_vy(hardware, op),
-                0x6 => lar_right_shift(hardware, op),
-                0x7 => lar_subtract_vy_vx(hardware, op),
-                0xE => lar_left_shift(hardware, op),
-                else => unimplemented_op_dump(op),
+                0x0 => larSetVXVY(hardware, op),
+                0x1 => larBitwiseOr(hardware, op),
+                0x2 => larBitwiseAnd(hardware, op),
+                0x3 => larBitwiseXor(hardware, op),
+                0x4 => larAdd(hardware, op),
+                0x5 => larSubtractVXVY(hardware, op),
+                0x6 => larRightShift(hardware, op),
+                0x7 => larSubtractVYVX(hardware, op),
+                0xE => larLeftShift(hardware, op),
+                else => unimplementedOpDump(op),
             }
         },
-        0x9 => conditional_skip_xy_neq(hardware, op),
+        0x9 => conditionalSkipXYNeq(hardware, op),
         0xA => setI(hardware, op),
-        0xB => jump_with_offset(hardware, op),
-        0xC => lar_random(hardware, op),
+        0xB => jumpWithOffset(hardware, op),
+        0xC => larRandom(hardware, op),
         0xD => draw(hardware, op),
         0xE => {
             switch (op.three) {
                 0x9 => {
                     switch (op.four) {
-                        0xE => skip_if_key_pressed(hardware, op),
-                        else => unimplemented_op_dump(op),
+                        0xE => skipIfKeyPressed(hardware, op),
+                        else => unimplementedOpDump(op),
                     }
                 },
                 0xA => {
                     switch (op.four) {
-                        0x1 => skip_if_key_not_pressed(hardware, op),
-                        else => unimplemented_op_dump(op),
+                        0x1 => skipIfKeyNotPressed(hardware, op),
+                        else => unimplementedOpDump(op),
                     }
                 },
-                else => unimplemented_op_dump(op),
+                else => unimplementedOpDump(op),
             }
         },
         0xF => {
             switch (op.three) {
                 0x0 => {
                     switch (op.four) {
-                        0x7 => set_vx_to_delay_timer(hardware, op),
-                        0xA => get_key(hardware, op),
-                        else => unimplemented_op_dump(op),
+                        0x7 => setVXToDelayTimer(hardware, op),
+                        0xA => getKey(hardware, op),
+                        else => unimplementedOpDump(op),
                     }
                 },
                 0x1 => {
                     switch (op.four) {
-                        0x5 => set_delay_timer_to_vx(hardware, op),
-                        0x8 => set_sound_timer_to_vx(hardware, op),
-                        0xE => add_vx_to_index(hardware, op),
-                        else => unimplemented_op_dump(op),
+                        0x5 => setDelayTimerToVX(hardware, op),
+                        0x8 => setSoundTimerToVX(hardware, op),
+                        0xE => addVXToIndex(hardware, op),
+                        else => unimplementedOpDump(op),
                     }
                 },
-                else => unimplemented_op_dump(op),
+                else => unimplementedOpDump(op),
             }
         },
-        else => unimplemented_op_dump(op),
+        else => unimplementedOpDump(op),
     }
 }
 
@@ -315,7 +320,7 @@ fn jump(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     BNNN - Jumps to the address NNN plus the value in register V0
 ///     B222 - Jumps to the address 222 plus the value in register V0 (333, if the value in register V0 is 111)
-fn jump_with_offset(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn jumpWithOffset(hardware: *core.Hardware, op: *const core.Opcode) void {
     const h: u12 = @as(u12, op.two) << 8;
     const t: u12 = @as(u12, op.three) << 4;
     const o: u12 = @as(u12, op.four);
@@ -383,7 +388,7 @@ fn setI(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     2NNN - Push the current address in the PC onto the stack and set the PC to address NNN as a subroutine call
 ///     22A5 - Push the current address in the PC onto the stack and set the PC to address 0x2A5 as a subroutine call
-fn subroutine_call(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn subroutineCall(hardware: *core.Hardware, op: *const core.Opcode) void {
     // Push the current address in the PC onto the stack}
     hardware.stack[hardware.stack_pointer] = hardware.PC;
     hardware.stack_pointer += 1;
@@ -402,7 +407,7 @@ fn subroutine_call(hardware: *core.Hardware, op: *const core.Opcode) void {
 ///
 /// Example:
 ///     00EE - Pop an address from the stack and set the PC to it
-fn subroutine_return(hardware: *core.Hardware) void {
+fn subroutineReturn(hardware: *core.Hardware) void {
     // The stack pointer will always be looking one above the top of the stack
     hardware.PC = hardware.stack[hardware.stack_pointer - 1];
     // Decrementing the stack pointer is enough to consider the item popped, future entries will just overwrite this
@@ -414,7 +419,7 @@ fn subroutine_return(hardware: *core.Hardware) void {
 /// Example:
 ///     3XNN - Skips one two byte instruction if the value in VX is equal to NN
 ///     30A0 - Skips one two byte instruction if the value in V0 is equal to 0xA0
-fn conditional_skip_eq(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn conditionalSkipEq(hardware: *core.Hardware, op: *const core.Opcode) void {
     const t: u8 = @as(u8, op.three) << 4;
     const o: u8 = @as(u8, op.four);
 
@@ -431,7 +436,7 @@ fn conditional_skip_eq(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     4XNN - Skips one two byte instruction if the value in VX is not equal to NN
 ///     40A0 - Skips one two byte instruction if the value in V0 is not equal to 0xA0
-fn conditional_skip_neq(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn conditionalSkipNeq(hardware: *core.Hardware, op: *const core.Opcode) void {
     const t: u8 = @as(u8, op.three) << 4;
     const o: u8 = @as(u8, op.four);
 
@@ -448,7 +453,7 @@ fn conditional_skip_neq(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     5XY0 - Skips one two byte instruction if the value in VX is equal to the value in VY
 ///     5560 - Skips one two byte instruction if the value in V5 is equal to the value in V6
-fn conditional_skip_xy_eq(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn conditionalSkipXYEq(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (hardware.V[op.two] == hardware.V[op.three]) {
         hardware.PC += 2;
     }
@@ -459,7 +464,7 @@ fn conditional_skip_xy_eq(hardware: *core.Hardware, op: *const core.Opcode) void
 /// Example:
 ///     9XY0 - Skips one two byte instruction if the value in VX is not equal to the value in VY
 ///     9A50 - Skips one two byte instruction if the value in VA is not equal to the value in V5
-fn conditional_skip_xy_neq(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn conditionalSkipXYNeq(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (hardware.V[op.two] != hardware.V[op.three]) {
         hardware.PC += 2;
     }
@@ -470,7 +475,7 @@ fn conditional_skip_xy_neq(hardware: *core.Hardware, op: *const core.Opcode) voi
 /// Example:
 ///     8XY0 - VX is set to the value of VY
 ///     8A40 - VA is set to the value of V4
-fn lar_set_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larSetVXVY(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] = hardware.V[op.three];
 }
 
@@ -479,7 +484,7 @@ fn lar_set_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY1 - VX is set to the bitwise OR of VX and VY
 ///     8A41 - VA is set to the bitwise OR of VA and V4
-fn lar_bitwise_or(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larBitwiseOr(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] |= hardware.V[op.three];
 }
 
@@ -488,7 +493,7 @@ fn lar_bitwise_or(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY2 - VX is set to the bitwise AND of VX and VY
 ///     8B22 - VB is set to the bitwise AND of VB and V2
-fn lar_bitwise_and(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larBitwiseAnd(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] &= hardware.V[op.three];
 }
 
@@ -497,7 +502,7 @@ fn lar_bitwise_and(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY3 - VX is set to the bitwise XOR of VX and VY
 ///     8013 - V0 is set to the bitwise XOR of V0 and V1
-fn lar_bitwise_xor(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larBitwiseXor(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] ^= hardware.V[op.three];
 }
 
@@ -507,7 +512,7 @@ fn lar_bitwise_xor(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY4 - VX is set to the value of VX plus the value of VY
 ///     8494 - V4 is set to the value of V4 plus the value of V9
-fn lar_add(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larAdd(hardware: *core.Hardware, op: *const core.Opcode) void {
     const ov = @addWithOverflow(hardware.V[op.two], hardware.V[op.three]);
 
     // Update the flag bit based on whether or not overflow occurred
@@ -521,7 +526,7 @@ fn lar_add(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY5 - VX is set to the value of VX minus VY
 ///     8385 - V3 is set to the value of V3 minus V8
-fn lar_subtract_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larSubtractVXVY(hardware: *core.Hardware, op: *const core.Opcode) void {
     const vx = hardware.V[op.two];
     const vy = hardware.V[op.three];
 
@@ -537,7 +542,7 @@ fn lar_subtract_vx_vy(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY7 - VX is set to the value of VY minus VX
 ///     88E7 - V8 is set to the value of VE minus V8
-fn lar_subtract_vy_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larSubtractVYVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     const vx = hardware.V[op.two];
     const vy = hardware.V[op.three];
 
@@ -555,7 +560,7 @@ fn lar_subtract_vy_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY6 - Shifts the value of VX one bit to the right
 ///     8BC6 - Shifts the value of VB one bit to the right
-fn lar_right_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larRightShift(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (set_vx_to_vy_on_shift) {
         hardware.V[op.two] = hardware.V[op.three];
     }
@@ -574,7 +579,7 @@ fn lar_right_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     8XY6 - Shifts the value of VX one bit to the left
 ///     8BC6 - Shifts the value of VB one bit to the left
-fn lar_left_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larLeftShift(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (set_vx_to_vy_on_shift) {
         hardware.V[op.two] = hardware.V[op.three];
     }
@@ -591,7 +596,7 @@ fn lar_left_shift(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     CXNN - Generates a random u8, performs a binary AND with the value NN, and stores the result in VX
 ///     CXBB - Generates a random u8, performs a binary AND with the value BB, and stores the result in VX
-fn lar_random(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn larRandom(hardware: *core.Hardware, op: *const core.Opcode) void {
     const t: u8 = @as(u8, op.three) << 4;
     const o: u8 = @as(u8, op.four);
 
@@ -608,7 +613,7 @@ fn lar_random(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     EX9E - Skips an instruction if the key corresponding to the value in VX is pressed
 ///     E29E - Skips an instruction if the key corresponding to the value in V2 is pressed
-fn skip_if_key_pressed(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn skipIfKeyPressed(hardware: *core.Hardware, op: *const core.Opcode) void {
     const key = hardware.V[op.two];
 
     // We can use the hex value directly since the keys are stored in the first 16 registers
@@ -624,7 +629,7 @@ fn skip_if_key_pressed(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     EXA1 - Skips an instruction if the key corresponding to the value in VX is not pressed
 ///     E2A1 - Skips an instruction if the key corresponding to the value in V2 is not pressed
-fn skip_if_key_not_pressed(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn skipIfKeyNotPressed(hardware: *core.Hardware, op: *const core.Opcode) void {
     const key = hardware.V[op.two];
 
     // We can use the hex value directly since the keys are stored in the first 16 registers
@@ -639,7 +644,7 @@ fn skip_if_key_not_pressed(hardware: *core.Hardware, op: *const core.Opcode) voi
 /// Example:
 ///     FX07 - Sets VX to the value of the delay timer
 ///     FA07 - Sets VA to the value of the delay timer
-fn set_vx_to_delay_timer(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn setVXToDelayTimer(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.V[op.two] = hardware.delay_timer;
 }
 
@@ -648,7 +653,7 @@ fn set_vx_to_delay_timer(hardware: *core.Hardware, op: *const core.Opcode) void 
 /// Example:
 ///     FX15 - Sets the delay timer to the value of VX
 ///     FB15 - Sets the delay timer to the value of VB
-fn set_delay_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn setDelayTimerToVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.delay_timer = hardware.V[op.two];
 }
 
@@ -657,7 +662,7 @@ fn set_delay_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void 
 /// Example:
 ///     FX18 - Sets the sound timer to the value of VX
 ///     FC18 - Sets the sound timer to the value of VC
-fn set_sound_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn setSoundTimerToVX(hardware: *core.Hardware, op: *const core.Opcode) void {
     hardware.sound_timer = hardware.V[op.two];
 }
 
@@ -666,7 +671,7 @@ fn set_sound_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void 
 /// Example:
 ///     FX1E - Adds the value in VX to the current value in the index register
 ///     F41E - Adds the value in V4 to the current value in the index register
-fn add_vx_to_index(hardware: *core.Hardware, op: *const core.Opcode) void {
+fn addVXToIndex(hardware: *core.Hardware, op: *const core.Opcode) void {
     const vx = hardware.V[op.two];
     const ov = @addWithOverflow(hardware.I, vx);
 
@@ -682,9 +687,11 @@ fn add_vx_to_index(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     FX0A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in VX
 ///     F10A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in V1
-fn get_key(hardware: *core.Hardware, _: *const core.Opcode) void {
-    // TODO: Need to either use the pump here or respond when the next key is pressed
-    hardware.PC -= 2;
+fn getKey(hardware: *core.Hardware, _: *const core.Opcode) void {
+    // Repeat this instruction while a key hasn't been pressed
+    if (!hardware.was_key_pressed_this_frame) {
+        hardware.PC -= 2;
+    }
 }
 
 /// Draws a sprite at the position indicated by the values contained in the registers
@@ -742,10 +749,10 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
 // Utilities
 //
 
-fn unimplemented_op_dump(op: *const core.Opcode) void {
+fn unimplementedOpDump(op: *const core.Opcode) void {
     std.log.err("Panic! Unimplemented opcode detected! ({X})", .{op.value});
 }
 
-fn is_draw_op(op: *const core.Opcode) bool {
+fn isDrawOp(op: *const core.Opcode) bool {
     return op.value == 0x00E0 or op.one == 0xD;
 }

@@ -52,6 +52,8 @@ pub const Hardware = struct {
     V: [16]u8 = .{0} ** 16,
     randomizer: std.Random,
 
+    was_key_pressed_this_frame: bool = false,
+
     /// Dumps the contents of the memory array into a `memory.zhip8.txt` file for debugging.
     pub fn printMemoryToFile(self: Hardware, allocator: std.mem.Allocator) !void {
         const file = try std.fs.cwd().createFile("memory.zhip8.txt", .{ .read = true });
