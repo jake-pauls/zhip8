@@ -81,12 +81,6 @@ pub fn main() !void {
 fn sdl_poll_events(hardware: *core.Hardware, isQuitEvent: *bool) void {
     var event: sdl.Event = undefined;
 
-    // TODO: Could use keyboard state for this...
-    // const keyboard: []const u8 = sdl.getKeyboardState();
-    // if (keyboard[@as(usize, @intFromEnum(sdl.Scancode.q))] == 1) {
-    //    std.debug.print("KEYBOARD STATE sdl.Scancode.q\n", .{});
-    // }
-
     while (sdl.pollEvent(&event)) {
         switch (event.type) {
             sdl.EventType.quit => isQuitEvent.* = true,
@@ -211,13 +205,13 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                             switch (op.four) {
                                 0x0 => clear(hardware),
                                 0xE => subroutine_return(hardware),
-                                else => unreachable_op_dump(op),
+                                else => unimplemented_op_dump(op),
                             }
                         },
-                        else => unreachable_op_dump(op),
+                        else => unimplemented_op_dump(op),
                     }
                 },
-                else => unreachable_op_dump(op),
+                else => unimplemented_op_dump(op),
             }
         },
         0x1 => jump(hardware, op),
@@ -238,7 +232,7 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                 0x6 => lar_right_shift(hardware, op),
                 0x7 => lar_subtract_vy_vx(hardware, op),
                 0xE => lar_left_shift(hardware, op),
-                else => unreachable_op_dump(op),
+                else => unimplemented_op_dump(op),
             }
         },
         0x9 => conditional_skip_xy_neq(hardware, op),
@@ -251,19 +245,39 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                 0x9 => {
                     switch (op.four) {
                         0xE => skip_if_key_pressed(hardware, op),
-                        else => unreachable_op_dump(op),
+                        else => unimplemented_op_dump(op),
                     }
                 },
                 0xA => {
                     switch (op.four) {
                         0x1 => skip_if_key_not_pressed(hardware, op),
-                        else => unreachable_op_dump(op),
+                        else => unimplemented_op_dump(op),
                     }
                 },
-                else => unreachable_op_dump(op),
+                else => unimplemented_op_dump(op),
             }
         },
-        else => unreachable_op_dump(op),
+        0xF => {
+            switch (op.three) {
+                0x0 => {
+                    switch (op.four) {
+                        0x7 => set_vx_to_delay_timer(hardware, op),
+                        0xA => get_key(hardware, op),
+                        else => unimplemented_op_dump(op),
+                    }
+                },
+                0x1 => {
+                    switch (op.four) {
+                        0x5 => set_delay_timer_to_vx(hardware, op),
+                        0x8 => set_sound_timer_to_vx(hardware, op),
+                        0xE => add_vx_to_index(hardware, op),
+                        else => unimplemented_op_dump(op),
+                    }
+                },
+                else => unimplemented_op_dump(op),
+            }
+        },
+        else => unimplemented_op_dump(op),
     }
 }
 
@@ -620,6 +634,59 @@ fn skip_if_key_not_pressed(hardware: *core.Hardware, op: *const core.Opcode) voi
     }
 }
 
+/// Sets VX to the current value of the delay timer.
+///
+/// Example:
+///     FX07 - Sets VX to the value of the delay timer
+///     FA07 - Sets VA to the value of the delay timer
+fn set_vx_to_delay_timer(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.V[op.two] = hardware.delay_timer;
+}
+
+/// Sets the delay timer to the current value of VX.
+///
+/// Example:
+///     FX15 - Sets the delay timer to the value of VX
+///     FB15 - Sets the delay timer to the value of VB
+fn set_delay_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.delay_timer = hardware.V[op.two];
+}
+
+/// Sets the sound timer to the current value of VX.
+///
+/// Example:
+///     FX18 - Sets the sound timer to the value of VX
+///     FC18 - Sets the sound timer to the value of VC
+fn set_sound_timer_to_vx(hardware: *core.Hardware, op: *const core.Opcode) void {
+    hardware.sound_timer = hardware.V[op.two];
+}
+
+/// The index register gets the value in VX added to it.
+///
+/// Example:
+///     FX1E - Adds the value in VX to the current value in the index register
+///     F41E - Adds the value in V4 to the current value in the index register
+fn add_vx_to_index(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const vx = hardware.V[op.two];
+    const ov = @addWithOverflow(hardware.I, vx);
+
+    // Update the flag bit based on whether or not overflow occurred
+    // Seems to be only required by "Spacefight 2091!", but it doesn't hurt to support it since the Amiga CHIP-8 implementation did
+    hardware.V[0xF] = if (ov[1] != 0) 1 else 0;
+    hardware.I = ov[0];
+}
+
+/// Stops executing instructions and waits for key input, puts the input key in VX.
+/// Performs the stop by decrementing the program counter so the last instruction is constantly re-fetched.
+///
+/// Example:
+///     FX0A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in VX
+///     F10A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in V1
+fn get_key(hardware: *core.Hardware, _: *const core.Opcode) void {
+    // TODO: Need to either use the pump here or respond when the next key is pressed
+    hardware.PC -= 2;
+}
+
 /// Draws a sprite at the position indicated by the values contained in the registers
 /// of the second and third bits of the opcode with N bytes of data represented by the fourth
 /// bit of the opcode starting at the address stored in I.
@@ -675,9 +742,8 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
 // Utilities
 //
 
-fn unreachable_op_dump(op: *const core.Opcode) void {
-    std.log.err("Panic! Unreachable opcode detected! ({X})", .{op.value});
-    //unreachable;
+fn unimplemented_op_dump(op: *const core.Opcode) void {
+    std.log.err("Panic! Unimplemented opcode detected! ({X})", .{op.value});
 }
 
 fn is_draw_op(op: *const core.Opcode) bool {
