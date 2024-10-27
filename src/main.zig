@@ -35,11 +35,13 @@ pub fn main() !void {
 
     // Initialize all values in the internal keyboard to 0
     // Decided to on using 0x0 to 0xF for this... because the memory here is unused anyways
-    for (0..15) |i| hardware.memory[0x0 + i] = 0;
+    for (0..15) |i| {
+        hardware.memory[0x0 + i] = 0;
+    }
 
     // Load the system font into memory - common to use 0x050 to 0x09F
     for (0..core.system_font.len) |i| {
-        hardware.memory[0x050 + i] = core.system_font[i];
+        hardware.memory[core.system_font_starting_address + i] = core.system_font[i];
     }
 
     // SDL
@@ -267,7 +269,7 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                 0x0 => {
                     switch (op.four) {
                         0x7 => setVXToDelayTimer(hardware, op),
-                        0xA => getKey(hardware, op),
+                        0xA => getKey(hardware),
                         else => unimplementedOpDump(op),
                     }
                 },
@@ -276,6 +278,18 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                         0x5 => setDelayTimerToVX(hardware, op),
                         0x8 => setSoundTimerToVX(hardware, op),
                         0xE => addVXToIndex(hardware, op),
+                        else => unimplementedOpDump(op),
+                    }
+                },
+                0x2 => {
+                    switch (op.four) {
+                        0x9 => fontCharacter(hardware, op),
+                        else => unimplementedOpDump(op),
+                    }
+                },
+                0x3 => {
+                    switch (op.four) {
+                        0x3 => binaryCodedDecimalConversion(hardware, op),
                         else => unimplementedOpDump(op),
                     }
                 },
@@ -687,11 +701,51 @@ fn addVXToIndex(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     FX0A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in VX
 ///     F10A - Blocks instruction execution until a key is pressed, the hex value for the key is then stored in V1
-fn getKey(hardware: *core.Hardware, _: *const core.Opcode) void {
+fn getKey(hardware: *core.Hardware) void {
     // Repeat this instruction while a key hasn't been pressed
     if (!hardware.was_key_pressed_this_frame) {
         hardware.PC -= 2;
     }
+}
+
+/// The index register is set to the address of the hexadecimal character in VX.
+///
+/// Example:
+///     FX29 - I is set to the address of the hexadecimal character in VX
+///     F929 - I is set to the address of the hexadecimal character in V9
+fn fontCharacter(hardware: *core.Hardware, op: *const core.Opcode) void {
+    // 0x050 is the starting address for the system font and each character has 5 bytes
+    const destination_address: u8 = 5 * hardware.V[op.two];
+    const ov = @addWithOverflow(core.system_font_starting_address, destination_address);
+
+    if (ov[1] == 0) {
+        hardware.I = ov[0];
+    } else {
+        std.log.err("Overflowed when accessing a font character! Font characters are only accessible in the range of 0x50 - 0xA0.\n\tdestination_address: {x}", .{destination_address});
+    }
+}
+
+/// Takes the number in VX and splits it into three decimal digits and stores them in the address pointed to in I, I+1, and I+2.
+///
+/// Example:
+///    FX33 - The hex number in VX is split into it's components (only 8-bits, so max 255) and each individual component is stored in I, I+1, and I+2 respectively
+///    F233 - The hex number in VX (125) is split into it's components (1, 2, and 5) and each individual component is stored in I (1), I+1 (2), and I+2 (5) respectively
+fn binaryCodedDecimalConversion(hardware: *core.Hardware, op: *const core.Opcode) void {
+    var vx: u8 = hardware.V[op.two];
+
+    var i: u8 = 0;
+    var digits: [3]u8 = .{0} ** 3;
+    while (vx > 0) : (i += 1) {
+        digits[i] = vx % 10;
+        vx /= 10;
+    }
+
+    // `digits` will contain each digit in the form [ones, tens, hundreds]
+    // According to the CHIP-8 spec, these should be laid out from I [hundreds, tens, ones], which is why we reverse the order
+    const I: u16 = hardware.I;
+    hardware.memory[I] = digits[2];
+    hardware.memory[I + 1] = digits[1];
+    hardware.memory[I + 2] = digits[0];
 }
 
 /// Draws a sprite at the position indicated by the values contained in the registers

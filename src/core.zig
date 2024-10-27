@@ -19,6 +19,8 @@ pub const sdl_color_black = sdl.Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
 /// RGBA constant for the color white.
 pub const sdl_color_white = sdl.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
+/// Starting address for the CHIP-8 system font in memory.
+pub const system_font_starting_address = 0x50;
 /// The CHIP-8 system font.
 pub const system_font = [80]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
