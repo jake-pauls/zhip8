@@ -5,10 +5,12 @@ const core = @import("core.zig");
 
 /// Configurable setting to set the register VX as VY prior to performing logical shifts.
 /// Used in some CHIP-8 games and programs.
-const set_vx_to_vy_on_shift: bool = true;
+const set_vx_to_vy_on_shift: bool = false;
 /// Configurable setting for the `jumpWithOffset` function that uses the second digit
 /// in the opcode as the register (VX) to add to the address being provided.
 const use_second_op_as_vx_for_jump_with_offset: bool = true;
+/// Prints some logs that may help with debugging.
+const print_info_logs: bool = false;
 
 pub fn main() !void {
     // Setup allocator
@@ -25,8 +27,11 @@ pub fn main() !void {
 
     // Read a ROM from disk for loading into the emulator
     // NOTE: Program should be loaded into memory at address 0x200
-    //const rom_file_path = "data/ROM/IBM Logo.ch8";
-    const rom_file_path = "data/ROM/Test/test_opcode.ch8";
+    // const rom_file_path = "data/ROM/Tetris.ch8";
+    // const rom_file_path = "data/ROM/Test/test_opcode.ch8";
+    // const rom_file_path = "data/ROM/Test/bc_test.ch8";
+    // const rom_file_path = "data/ROM/Test/SCTEST.ch8";
+    const rom_file_path = "data/ROM/Test/chip8-test-suite/bin/4-flags.ch8";
     const read_buffer: []u8 = try std.fs.cwd().readFileAlloc(allocator, rom_file_path, std.math.maxInt(u32));
     defer allocator.free(read_buffer);
     for (0..read_buffer.len) |i| {
@@ -67,6 +72,10 @@ pub fn main() !void {
         sdlPollEvents(&hardware, &isQuit);
 
         const op = fetch(&hardware);
+        if (print_info_logs) {
+            std.log.info("next instruction: {X}\n", .{op.value});
+        }
+
         execute(&hardware, &op);
 
         if (isDrawOp(&op)) {
@@ -293,6 +302,18 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
                         else => unimplementedOpDump(op),
                     }
                 },
+                0x5 => {
+                    switch (op.four) {
+                        0x5 => storeMemory(hardware, op),
+                        else => unimplementedOpDump(op),
+                    }
+                },
+                0x6 => {
+                    switch (op.four) {
+                        0x5 => loadMemory(hardware, op),
+                        else => unimplementedOpDump(op),
+                    }
+                },
                 else => unimplementedOpDump(op),
             }
         },
@@ -309,7 +330,7 @@ fn execute(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Example:
 ///     00E0 - Clear the screen
 fn clear(hardware: *core.Hardware) void {
-    hardware.display = .{.{0} ** 64} ** 32;
+    hardware.display = .{.{0} ** core.display_width_in_pixels} ** core.display_height_in_pixels;
 }
 
 /// Constructs the address of the jump using the last three bits of the opcode
@@ -591,8 +612,8 @@ fn larRightShift(hardware: *core.Hardware, op: *const core.Opcode) void {
 /// Configurable: Use `set_vx_to_vy_on_shift` in order to set VX as VY for shifts.
 ///
 /// Example:
-///     8XY6 - Shifts the value of VX one bit to the left
-///     8BC6 - Shifts the value of VB one bit to the left
+///     8XYE - Shifts the value of VX one bit to the left
+///     8BCE - Shifts the value of VB one bit to the left
 fn larLeftShift(hardware: *core.Hardware, op: *const core.Opcode) void {
     if (set_vx_to_vy_on_shift) {
         hardware.V[op.two] = hardware.V[op.three];
@@ -748,6 +769,37 @@ fn binaryCodedDecimalConversion(hardware: *core.Hardware, op: *const core.Opcode
     hardware.memory[I + 2] = digits[0];
 }
 
+/// Stores the values from V0 to VX, starting with the current address in the index register.
+///
+/// Example:
+///    FX55 - Starting at V0 stores addresses in the index register until VX is stored in I+X (e.g., V0 -> I, V1 -> I+1, ..., VX -> I+X)
+///    F255 - Starting at V0 stores addresses in the index register until V2 is stored in I+2 (e.g., V0 -> I, V1 -> I+1, V2 -> I+2)
+fn storeMemory(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const x = op.two;
+    const I = hardware.I;
+
+    // Note: We're using the "modern" behaviour here, I will remain the same after values are stored
+    for (0..x + 1) |i| {
+        const v = hardware.V[i];
+        hardware.memory[I + i] = v;
+    }
+}
+
+/// Loads the values from I, I+1, ..., I+X and loads them into the variable registers, until VX is loaded.
+///
+/// Example:
+///    FX65 - Loads the values from I, I+1, ..., I+X until VX is loaded (e.g, I -> V0, I+1 -> V1, ..., I+X -> VX)
+///    F565 - Loads the values from I, I+1, I+2, I+3, I+4, I+5 until V5 is loaded (e.g., I -> V0, I+1 -> V1, I+2 -> V2, I+3 -> V3, I+4 -> V4, I+5 -> V5)
+fn loadMemory(hardware: *core.Hardware, op: *const core.Opcode) void {
+    const x = op.two;
+    const I = hardware.I;
+
+    for (0..x + 1) |i| {
+        const ix = hardware.memory[I + i];
+        hardware.V[i] = ix;
+    }
+}
+
 /// Draws a sprite at the position indicated by the values contained in the registers
 /// of the second and third bits of the opcode with N bytes of data represented by the fourth
 /// bit of the opcode starting at the address stored in I.
@@ -778,7 +830,20 @@ fn draw(hardware: *core.Hardware, op: *const core.Opcode) void {
         var x_index: u3 = 0;
 
         // Iterate while the shifting index is positive, we break early to prevent underflow.
-        while (shift_index >= 0 and x_index < 8) : (x_index += 1) {
+        while (shift_index >= 0 and x_index <= 8) : (x_index += 1) {
+            // If drawing reaches the right edge of the screen, go to the next row.
+            if ((x + x_index) >= core.display_width_in_pixels) {
+                break;
+            }
+
+            // If this is logged something is likely _very_ wrong (especially with the check above).
+            // Log and display some debugging information as this would've caused a crash anyways
+            if ((y + i) >= core.display_height_in_pixels or (x + x_index) >= core.display_width_in_pixels) {
+                std.log.err("Screen is drawing out of bounds! Check the decomp below for more info...\n", .{});
+                std.log.err("\thardware.display[{d} + {d}][{d} + {d}] => hardware.display[{d}][{d}]\n", .{ y, i, x, x_index, y + i, x + x_index });
+                break;
+            }
+
             // Right shift the row by our shifting index and truncate it to
             // the last bit, this allows us to always access the end bit of the word
             const sprite_bit: u1 = @truncate(sprite_row >> shift_index);
